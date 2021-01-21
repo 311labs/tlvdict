@@ -1,0 +1,3 @@
+-i https://pypi.org/simple
+git+git://github.com/311labs/objict@master#egg=objict
+
