@@ -6,8 +6,6 @@ from setuptools.command.test import test as TestCommand
 import os
 import sys
 
-import tlvdict
-
 ROOT = os.path.abspath(os.path.dirname(__file__))
 
 tests_require = ['pytest', 'pytest-pep8']
