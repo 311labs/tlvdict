@@ -71,7 +71,7 @@ setup(
         'Topic :: Utilities',
     ],
     install_requires=[
-        'objict @ git+ssh://git@github.com/311labs/objict.git#egg=objict',
+        'objict',
     ],
     extras_require={
         'dev': ['check-manifest', 'wheel'],
