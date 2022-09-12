@@ -42,7 +42,7 @@ class PyTest(TestCommand):
 
 setup(
     name='tlvdict',
-    version=tlvdict.__version__,
+    version="3.0",
     url='https://github.com/311labs/tlvdict/',
     author='Ian Starnes',
     author_email='ian@311labs.com',
