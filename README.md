@@ -4,6 +4,12 @@
 
 Simple class that supports TLV encoding/decoding.
 
+## Installation
+
+```
+pip install tlvdict
+```
+
 
 ## Simple to use!
 
