@@ -1,15 +1,23 @@
-__version_info__ = (1, 1, 0)
-__version__ = ".".join(map(str, __version_info__))
-ALL = ["tlvdict"]
-
-#!/usr/bin/env python
-
 from collections import OrderedDict
 from objict import objict
 import sys
-import binascii
+
+__version_info__ = (1, 2, 0)
+__version__ = ".".join(map(str, __version_info__))
+ALL = ["tlvdict"]
 
 is_py3 = sys.version_info > (3, 0)
+
+
+def parse(data):
+    # attempts to parse data into a TLVDict
+    return TLVDict.Parse(data)
+
+
+def encode(data):
+    tlv = TLVDict.FromDict(data)
+    return tlv.toHex()
+
 
 class TLVDict(OrderedDict):
     """
@@ -29,22 +37,27 @@ class TLVDict(OrderedDict):
         return value
 
     def decodeTag(self, name, value=None):
-        # encoding is not supported in base TLVDict
+        # decoding is not supported in base TLVDict
         if value is None:
             hex_name = self.getTagHexName(name)
             return self.get(hex_name, None)
         return value
+
+    def getTagName(self, name):
+        return EMV_TAGS_TO_NAMES.get(name, name)
 
     def getTagHexName(self, name):
         # this will return a tags hex name, even if you pass in the hex name
         # some specs may decide to implement a mapping from hex names to readable names
         if self.spec and hasattr(self.spec, "getTagHexName"):
             return self.spec.getTagHexName(name)
+        if name in EMV_NAMES_TO_TAGS:
+            return EMV_NAMES_TO_TAGS[name]
         return name.upper()
 
     def hasTag(self, name):
         hex_name = self.getTagHexName(name)
-        return self.has_key(hex_name)
+        return hex_name in self
 
     def removeTag(self, name):
         if type(name) is list:
@@ -52,7 +65,7 @@ class TLVDict(OrderedDict):
                 self.removeTag(n)
             return
         hex_name = self.getTagHexName(name)
-        if self.has_key(hex_name):
+        if hex_name in self:
             del self[hex_name]
 
     def setTag(self, name, value, encode=True):
@@ -91,7 +104,7 @@ class TLVDict(OrderedDict):
         if tags:
             data_dict = OrderedDict()
             for hex_tag in tags:
-                if self.has_key(hex_tag):
+                if hex_tag in self:
                     data_dict[hex_tag] = self[hex_tag]
 
         if not data_dict:
@@ -133,10 +146,19 @@ class TLVDict(OrderedDict):
         tlv_string = self.build(data_dict)
         return bytearray.fromhex(tlv_string)
 
+    def toHex(self):
+        return self.build(self)
+
+    def toDict(self, readable=True):
+        out = objict()
+        for key, value in self.items():
+            out[self.getTagName(key)] = value
+        return out
+
     def getUnknownTags(self, tag_spec):
         unknown = []
         for key in self:
-            if not tag_spec.has_key(key):
+            if key not in tag_spec:
                 unknown.append(key)
         return unknown
 
@@ -153,6 +175,15 @@ class TLVDict(OrderedDict):
             del self[key]
         return unknown
 
+    @classmethod
+    def Parse(cls, data):
+        if isinstance(data, str):
+            return cls.ParseBytes(bytearray.fromhex(data))
+        elif isinstance(data, bytes):
+            return cls.ParseBytes(data)
+        elif isinstance(data, dict):
+            return cls.FromDict(data)
+        raise ValueError("invalid format for parsing: {}".format(type(data)))
 
     @classmethod
     def ParseHex(cls, data):
@@ -188,7 +219,7 @@ class TLVDict(OrderedDict):
             if is_constructed(tag_bytes[0]):
                 value = TLVDict.ParseBytes(value_bytes)
 
-            if tlv.has_key(tag):
+            if tag in tlv:
                 value = [tlv[tag], value]
             if isString(value):
                 tlv[tag] = value.upper()
@@ -198,21 +229,30 @@ class TLVDict(OrderedDict):
 
     @classmethod
     def FromDict(cls, data):
+        if not isinstance(data, dict):
+            return cls.Parse(data)
         tlv = cls()
         for key, value in data.items():
             # key = key.upper()
             if key.startswith('00'):
                 key = key[2:]
+            if key.lower() in EMV_NAMES_TO_TAGS:
+                key = EMV_NAMES_TO_TAGS[key]
             if isinstance(value, (str, bytes)):
                 tlv[key] = value.upper()
             elif isinstance(value, dict):
                 tlv[key] = TLVDict.FromDict(value)
+            elif value is None:
+                # we remove tags that have no value
+                continue
             else:
                 print("unsupported tag type: {}:'{}'".format(type(value), value))
         return tlv
 
+
 # backwards compatability
 TLV = TLVDict
+
 
 def packTag(tag, value):
     """
@@ -230,6 +270,7 @@ def packTag(tag, value):
     output.append(value)
     return "".join(output)
 
+
 def getTagLengthLength(length):
     if not length:
         return 3
@@ -242,6 +283,7 @@ def getTagLengthLength(length):
     if length > 0x0000007F:
         return 2
     return 1
+
 
 def decodeTag(tlv_string):
     """
@@ -312,6 +354,7 @@ def decodeTag(tlv_string):
         value_bytes=value_bytes,
     )
 
+
 def is_two_byte(val):
     """ A tag is at least two bytes long if the least significant
         5 bits of the first byte are set. """
@@ -334,10 +377,12 @@ def hexToBytes(hex_value):
         pass
     return bytearray.fromhex(hex_value)
 
+
 def isString(value):
     if is_py3:
         return isinstance(value, str) or isinstance(value, bytes)
     return isinstance(value, basestring)
+
 
 def getBit(byteval, idx):
     idx -= 1
@@ -358,12 +403,22 @@ def clearBit(byteval, idx):
     return byteval & mask
 
 
+def toBytes(value):
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    elif isinstance(value, bytearray):
+        value = bytes(value)
+    elif isinstance(value, list):
+        value = bytes(bytearray(value))
+    return value
+
+
+def toHex(value):
+    return toBytes(value).hex().upper()
+
+
 def bytesToHex(data):
-    if type(data) is list or isinstance(data, bytes):
-        data = bytearray(data)
-    if is_py3:
-        return str(binascii.hexlify(data), "utf-8")
-    return binascii.hexlify(data).upper()
+    return toHex(data)
 
 
 def isHex(hex_value):
@@ -371,7 +426,7 @@ def isHex(hex_value):
         try:
             int(hex_value, 16)
             return True
-        except:
+        except Exception:
             pass
     return False
 
@@ -430,3 +485,133 @@ def hexify(value):
         return strToHex(value)
     return value
 
+
+EMV_TAGS_TO_NAMES = {
+    "06": "oid",
+    "42": "iin",
+    "46": "pre_issuing_data",
+    "4F": "adf_name",
+    "50": "app_label",
+    "56": "track1",
+    "57": "track2",
+    "5A": "pan",
+    "5C": "tag_list",
+    "5F20": "name",
+    "5F24": "app_expires",
+    "5F25": "app_effective",
+    "5F28": "app_country",
+    "5F2A": "transaction_country",
+    "5F2D": "langs",
+    "5F30": "service_code",
+    "5F34": "app_pan_seq",
+    "5F36": "currency_exponent",
+    "5F50": "issuer_url",
+    "5F53": "iban",
+    "5F54": "bic",
+    "5F55": "app_country_a2",
+    "5F56": "app_country_a3",
+    "5F57": "card_type",
+    "60": "template",
+    "61": "app_record",
+    "63": "wrapper",
+    "64": "fmd",
+    "65": "cardholder_data",
+    "6F": "fci",
+    "70": "record",
+    "71": "ist1",
+    "72": "ist2",
+    "73": "ddt",
+    "77": "rmtf2",
+    "80": "rmtf1",
+    "81": "amount_authorized_binary",
+    "82": "aip",
+    "84": "df",
+    "87": "app_priority",
+    "88": "sfi",
+    "89": "auth_code",
+    "8A": "auth_resp_code",
+    "8C": "cdol1",
+    "8D": "cdol2",
+    "8E": "cvm_list",
+    "8F": "issuer_pub_key_index",
+    "90": "issuer_pub_key_cert",
+    "91": "issuer_auth_data",
+    "92": "issuer_pub_key_remainder",
+    "93": "signed_app_data",
+    "94": "afl",
+    "95": "tvr",
+    "97": "tdol",
+    "98": "tc_hash",
+    "99": "transaction_pin",
+    "9A": "transaction_date",
+    "9B": "tsi",
+    "9C": "transaction_type",
+    "9D": "ddf",
+    "9F01": "acquirer_id",
+    "9F02": "amount_authorized",
+    "9F03": "amount_other",
+    "9F04": "amount_other_binary",
+    "9F06": "terminal_aid",
+    "9F07": "auc",
+    "9F08": "icc_app_version",
+    "9F09": "terminal_app_version",
+    "9F0B": "name_ext",
+    "9F0D": "iac_default",
+    "9F0E": "iac_denial",
+    "9F0F": "iac_online",
+    "9F10": "iad",
+    "9F11": "icti",
+    "9F12": "app_preferred_name",
+    "9F13": "last_online_atc",
+    "9F15": "mcc",
+    "9F16": "merchant_id",
+    "9F17": "pin_tries_remaining",
+    "9F1A": "term_country_code",
+    "9F1B": "terminal_floor_limit",
+    "9F1C": "tid",
+    "9F1D": "terminal_risk_management",
+    "9F1E": "ifd_serial_number",
+    "9F1F": "track1_disc",
+    "9F20": "track2_disc",
+    "9F21": "transaction_time",
+    "9F24": "par",
+    "9F26": "cryptogram",
+    "9F27": "cid",
+    "9F2D": "icc_pin_pk",
+    "9F2E": "icc_pin_pk_exp",
+    "9F2F": "icc_pin_pk_rem",
+    "9F32": "ipke",
+    "9F33": "terminal_capabilities",
+    "9F34": "cvm_results",
+    "9F35": "terminal_type",
+    "9F36": "atc",
+    "9F37": "unpredictable_number",
+    "9F38": "pdol",
+    "9F39": "pos_entry_mode",
+    "9F3B": "icc_currency_code",
+    "9F40": "additional_terminal_caps",
+    "9F41": "trans_seq_counter",
+    "9F42": "app_currency",
+    "9F43": "icc_currency_exp",
+    "9F44": "app_currency_exponent",
+    "9F45": "data_auth_code",
+    "9F46": "icc_pk_cert",
+    "9F47": "icc_pk_exponent",
+    "9F48": "icc_pk_remainder",
+    "9F49": "ddol",
+    "9F4A": "data_auth_tags",
+    "9F4B": "sdad",
+    "9F4C": "icc_dynamic_number",
+    "9F4E": "merchant_name",
+    "9F53": "trans_category_code",
+    "9F5B": "dsdol",
+    "9F5C": "mdol",
+    "9F6A": "unpredictable_number_numeric",
+    "A5": "fci_prop",
+    "C5": "card_issuer_action",
+    "DF0C": "kernal_id",
+    "DF20": "ipb",
+    "DF21": "iaf"
+}
+
+EMV_NAMES_TO_TAGS = {value: key for key, value in EMV_TAGS_TO_NAMES.items()}
